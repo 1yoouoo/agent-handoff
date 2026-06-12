@@ -12,6 +12,10 @@ while [[ -L "$SOURCE" ]]; do
 done
 ROOT_DIR="$(cd "$(dirname "$SOURCE")/.." && pwd)"
 
+# Where the code actually lives, so update/version act on the real
+# checkout rather than the data directory (AGENT_HANDOFF_HOME).
+export AGENT_HANDOFF_ROOT="$ROOT_DIR"
+
 # shellcheck source=../lib/agent-handoff.sh
 source "$ROOT_DIR/lib/agent-handoff.sh"
 

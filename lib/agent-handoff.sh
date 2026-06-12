@@ -540,9 +540,15 @@ Usage:
 EOF
 }
 
+# The code checkout to update against, preferring the actually-running
+# script (AGENT_HANDOFF_ROOT, set by bin/agent-handoff) over the data dir.
+agent_handoff_code_dir() {
+  printf '%s\n' "${AGENT_HANDOFF_INSTALL_DIR:-${AGENT_HANDOFF_ROOT:-$HOME/.agent-handoff}}"
+}
+
 agent_handoff_version() {
   local dir
-  dir="${AGENT_HANDOFF_INSTALL_DIR:-$HOME/.agent-handoff}"
+  dir="$(agent_handoff_code_dir)"
   if [[ -d "$dir/.git" ]] && command -v git >/dev/null 2>&1; then
     git -C "$dir" describe --tags --always --dirty 2>/dev/null ||
       git -C "$dir" rev-parse --short HEAD 2>/dev/null ||
@@ -554,7 +560,7 @@ agent_handoff_version() {
 
 agent_handoff_update() {
   local dir
-  dir="${AGENT_HANDOFF_INSTALL_DIR:-$HOME/.agent-handoff}"
+  dir="$(agent_handoff_code_dir)"
 
   if ! command -v git >/dev/null 2>&1; then
     printf 'git is required to update agent-handoff.\n' >&2
