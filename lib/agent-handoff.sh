@@ -318,12 +318,17 @@ agent_handoff_browse() {
   fi
 
   if ! command -v fzf >/dev/null 2>&1; then
+    printf 'fzf not found — using numbered prompts. Install fzf for the interactive browser.\n' >&2
     local cwd
     cwd="$(agent_handoff_pick_from_lines "Project" "" "$(printf '%s\n' "${projects[@]}")")" || return 1
     agent_handoff_pick_from_lines "Session" "" \
       "$(agent_handoff_spinner 'Loading sessions...' agent_handoff_sessions_display "$index" "$cwd")"
     return
   fi
+
+  # --header-first needs fzf >= 0.31; degrade gracefully on older versions.
+  local header_first="--header-first"
+  fzf --help 2>&1 | grep -q -- '--header-first' || header_first=""
 
   # Start at the current directory, climbing up until sessions exist in scope.
   local scope="$PWD"
@@ -342,8 +347,9 @@ agent_handoff_browse() {
   while :; do
     lines="$(agent_handoff_spinner 'Loading sessions...' agent_handoff_sessions_display "$index" "$scope")"
     scope_line="Folder: "$'\033[35m'"${scope/#$HOME/~}"$'\033[0m'
+    # shellcheck disable=SC2086
     out="$(printf '%s\n' "$lines" |
-      fzf --ansi --prompt='Type to search: ' --layout=reverse --header-first \
+      fzf --ansi --prompt='Type to search: ' --layout=reverse $header_first \
         --header="$title_line
 $scope_line
 $help_line" \
@@ -419,7 +425,10 @@ agent_handoff_confirm() {
   printf 'Continue? [Y/n] '
   local answer
   read -r answer
-  [[ -z "$answer" || "$answer" == "y" || "$answer" == "Y" ]]
+  case "$answer" in
+    '' | [yY] | [yY][eE][sS]) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 agent_handoff_copy_raw() {

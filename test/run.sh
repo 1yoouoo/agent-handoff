@@ -145,7 +145,40 @@ test_install_adds_path_to_zsh_profile_once() {
   pass "install adds PATH to .zshrc exactly once"
 }
 
+test_confirm_accepts_yes_and_rejects_no() {
+  local tmp project output
+  tmp="$(mktemp -d)"
+  project="$(make_fixture "$tmp")"
+
+  output="$(
+    printf 'yes\n' |
+    AGENT_HANDOFF_HOME="$tmp/out" \
+    AGENT_HANDOFF_CLAUDE_HOME="$tmp/claude" \
+    AGENT_HANDOFF_CODEX_HOME="$tmp/codex" \
+    AGENT_HANDOFF_PICK_PROJECT=1 \
+    AGENT_HANDOFF_PICK_SESSION=1 \
+    AGENT_HANDOFF_PICK_TARGET=codex \
+    AGENT_HANDOFF_DRY_RUN=1 \
+    "$ROOT_DIR/bin/agent-handoff"
+  )"
+  assert_contains "$output" "Dry run command" "confirm yes"
+
+  if printf 'no\n' |
+    AGENT_HANDOFF_HOME="$tmp/out" \
+    AGENT_HANDOFF_CLAUDE_HOME="$tmp/claude" \
+    AGENT_HANDOFF_CODEX_HOME="$tmp/codex" \
+    AGENT_HANDOFF_PICK_PROJECT=1 \
+    AGENT_HANDOFF_PICK_SESSION=1 \
+    AGENT_HANDOFF_PICK_TARGET=codex \
+    AGENT_HANDOFF_DRY_RUN=1 \
+    "$ROOT_DIR/bin/agent-handoff" >/dev/null 2>&1; then
+    fail "confirm no: expected non-zero exit"
+  fi
+  pass "confirm accepts yes and rejects no"
+}
+
 test_lists_projects_from_both_agents
 test_creates_raw_handoff_and_dry_runs_target
 test_codex_session_uses_first_user_message_as_title
 test_install_adds_path_to_zsh_profile_once
+test_confirm_accepts_yes_and_rejects_no

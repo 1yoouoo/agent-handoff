@@ -12,7 +12,7 @@ This is not native session import — it copies the selected session's raw trans
 curl -fsSL https://raw.githubusercontent.com/1yoouoo/agent-handoff/main/install.sh | sh
 ```
 
-This clones the repo to `~/.agent-handoff` and adds its `bin` directory to your shell profile (zsh, bash, and fish are detected automatically). Restart your shell afterwards.
+This clones the repo to `~/.agent-handoff` and adds its `bin` directory to your shell profile (zsh, bash, and fish are detected automatically). If `jq` or `fzf` is missing, the installer offers to install them with your package manager (brew, apt, dnf, or pacman). Restart your shell afterwards.
 
 Manual install:
 
@@ -63,6 +63,8 @@ Override the launch commands to add flags, e.g. `export AGENT_HANDOFF_CLAUDE_CMD
 - `bash`, `jq`
 - `fzf` — optional; falls back to numbered prompts without it
 - `git` — install only
+
+The installer offers to install `jq` and `fzf` for you if they are missing.
 
 ## License
 
