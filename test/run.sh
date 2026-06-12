@@ -38,6 +38,7 @@ make_fixture() {
 {"type":"ai-title","sessionId":"claude-1","title":"Claude fixture title"}
 {"type":"user","sessionId":"claude-1","cwd":"$project","message":{"role":"user","content":"Please fix the UI"}}
 {"type":"assistant","sessionId":"claude-1","cwd":"$project","message":{"role":"assistant","content":"I changed the UI"}}
+{"type":"user","sessionId":"claude-1","cwd":"$project","message":{"role":"user","content":"Now add a test"}}
 EOF
 
   cat > "$codex_dir/rollout-codex-session.jsonl" <<EOF
@@ -89,7 +90,7 @@ test_creates_raw_handoff_and_dry_runs_target() {
   )"
 
   assert_contains "$output" "Session: Claude Code" "dry run output"
-  assert_contains "$output" "Claude fixture title" "dry run output"
+  assert_contains "$output" "Now add a test" "dry run output"
   assert_contains "$output" "Target:  Codex" "dry run output"
   assert_contains "$output" "Command: codex" "dry run output"
   assert_contains "$output" "override with AGENT_HANDOFF_CODEX_CMD" "dry run output"
@@ -121,7 +122,36 @@ test_codex_session_uses_first_user_message_as_title() {
   assert_contains "$output" "Session: Codex" "codex session output"
   assert_contains "$output" "Please continue" "codex session output"
   assert_contains "$output" "Command: claude" "codex session output"
-  pass "codex session title comes from first user message"
+  pass "codex session title comes from the latest user message"
+}
+
+test_claude_title_falls_back_to_ai_title() {
+  local tmp project claude_dir output
+  tmp="$(mktemp -d)"
+  project="$tmp/work/notes"
+  claude_dir="$tmp/claude/projects/${project//\//-}"
+  mkdir -p "$project" "$claude_dir" "$tmp/codex/sessions"
+
+  # A session with no genuine user message — only an ai-title and noise.
+  cat > "$claude_dir/s.jsonl" <<EOF
+{"type":"ai-title","sessionId":"a","title":"Summarized title"}
+{"type":"user","sessionId":"a","cwd":"$project","message":{"role":"user","content":"<command-name>/init</command-name>"}}
+EOF
+
+  output="$(
+    AGENT_HANDOFF_HOME="$tmp/out" \
+    AGENT_HANDOFF_CLAUDE_HOME="$tmp/claude" \
+    AGENT_HANDOFF_CODEX_HOME="$tmp/codex" \
+    AGENT_HANDOFF_PICK_PROJECT=1 \
+    AGENT_HANDOFF_PICK_SESSION=1 \
+    AGENT_HANDOFF_PICK_TARGET=codex \
+    AGENT_HANDOFF_ASSUME_YES=1 \
+    AGENT_HANDOFF_DRY_RUN=1 \
+    "$ROOT_DIR/bin/agent-handoff"
+  )"
+
+  assert_contains "$output" "Summarized title" "ai-title fallback"
+  pass "claude title falls back to ai-title when no real user message"
 }
 
 test_install_adds_path_to_zsh_profile_once() {
@@ -200,6 +230,7 @@ test_help_and_version_and_update() {
 test_lists_projects_from_both_agents
 test_creates_raw_handoff_and_dry_runs_target
 test_codex_session_uses_first_user_message_as_title
+test_claude_title_falls_back_to_ai_title
 test_install_adds_path_to_zsh_profile_once
 test_confirm_accepts_yes_and_rejects_no
 test_help_and_version_and_update

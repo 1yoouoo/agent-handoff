@@ -174,36 +174,47 @@ agent_handoff_codex_session_id() {
 agent_handoff_session_title() {
   local agent="$1" file="$2" title=""
 
+  # A user line is noise when it's an injected/system message rather than
+  # something the person typed (context blocks, caveats, image/command markers,
+  # interrupt notices, the handoff prompt).
+  local noise='(
+    startswith("<") or startswith("Caveat:") or startswith("# AGENTS.md")
+    or startswith("[Image") or startswith("[Request interrupted")
+    or startswith("[Image #") or test(" raw session transcript is available at:")
+  )'
+
   case "$agent" in
     claude)
-      title="$(tail -n 200 "$file" 2>/dev/null |
-        jq -Rr 'fromjson? | objects | select(.type == "ai-title") | .title // empty' 2>/dev/null |
-        tail -n 1)"
+      # Prefer the most recent thing the user actually said.
+      title="$(tail -n 400 "$file" 2>/dev/null |
+        jq -Rr "
+          fromjson? | objects | select(.type == \"user\") | .message.content?
+          | if type == \"string\" then .
+            elif type == \"array\" then (.[]? | select(.type? == \"text\") | .text?)
+            else empty end
+          | select(type == \"string\")
+          | select($noise | not)
+          | split(\"\n\")[0]
+        " 2>/dev/null |
+        awk 'NF { last = $0 } END { if (last != "") print last }')"
+      # Fall back to Claude's own session title, then the first user message.
       if [[ -z "$title" ]]; then
-        title="$(head -n 100 "$file" 2>/dev/null |
-          jq -Rr '
-            fromjson? | objects | select(.type == "user") | .message.content?
-            | if type == "string" then .
-              elif type == "array" then (.[]? | select(.type? == "text") | .text?)
-              else empty end
-            | select(type == "string")
-            | select((startswith("<") or startswith("Caveat:")) | not)
-            | split("\n")[0]
-          ' 2>/dev/null |
-          awk 'NF { print; exit }')"
+        title="$(tail -n 400 "$file" 2>/dev/null |
+          jq -Rr 'fromjson? | objects | select(.type == "ai-title") | .title // empty' 2>/dev/null |
+          tail -n 1)"
       fi
       ;;
     codex)
-      title="$(head -n 50 "$file" 2>/dev/null |
-        jq -Rr '
-          fromjson? | objects | select(.type == "response_item")
-          | .payload | objects | select(.type == "message" and .role == "user")
-          | .content[]? | select(.type? == "input_text") | .text?
-          | select(type == "string")
-          | select((startswith("<") or startswith("# AGENTS.md")) | not)
-          | split("\n")[0]
-        ' 2>/dev/null |
-        awk 'NF { print; exit }')"
+      title="$(tail -n 400 "$file" 2>/dev/null |
+        jq -Rr "
+          fromjson? | objects | select(.type == \"response_item\")
+          | .payload | objects | select(.type == \"message\" and .role == \"user\")
+          | .content[]? | select(.type? == \"input_text\") | .text?
+          | select(type == \"string\")
+          | select($noise | not)
+          | split(\"\n\")[0]
+        " 2>/dev/null |
+        awk 'NF { last = $0 } END { if (last != "") print last }')"
       [[ -n "$title" ]] || title="$(agent_handoff_codex_session_id "$file")"
       ;;
   esac
