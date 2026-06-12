@@ -229,46 +229,75 @@ agent_handoff_reltime() {
   fi
 }
 
-agent_handoff_session_title_cached() {
-  local agent="$1" file="$2" mtime="$3"
-  local cache title
-  cache="$(agent_handoff_home)/cache/titles.tsv"
-
-  if [[ -f "$cache" ]]; then
-    title="$(awk -F '\t' -v f="$file" -v m="$mtime" '$1 == f && $2 == m { print $3; exit }' "$cache")"
-    if [[ -n "$title" ]]; then
-      printf '%s\n' "$title"
-      return
-    fi
-  fi
-
-  title="$(agent_handoff_session_title "$agent" "$file")"
+# Ensure titles for the given sessions are in the cache, extracting (slowly)
+# only the ones that are missing. Reads "agent<TAB>file<TAB>mtime" lines.
+# Cache membership is resolved in a single awk pass, so a fully-warm cache
+# costs one awk run rather than one per session.
+agent_handoff_fill_title_cache() {
+  local cache="$1"
   mkdir -p "$(dirname "$cache")"
-  printf '%s\t%s\t%s\n' "$file" "$mtime" "$title" >> "$cache"
-  printf '%s\n' "$title"
+  touch "$cache"
+
+  local agent file mtime title
+  while IFS=$'\t' read -r agent file mtime; do
+    [[ -n "$file" ]] || continue
+    title="$(agent_handoff_session_title "$agent" "$file")"
+    printf '%s\t%s\t%s\n' "$file" "$mtime" "$title" >> "$cache"
+  done < <(
+    awk -F '\t' -v cache="$cache" '
+      BEGIN { while ((getline l < cache) > 0) { split(l, a, "\t"); seen[a[1] SUBSEP a[2]] = 1 } }
+      $2 != "" && !((($2) SUBSEP ($3)) in seen)
+    '
+  )
 }
 
 # Session line: display \t cwd \t agent_id \t agent_label \t file \t title
 # Lists sessions whose project is at or below the scope directory.
+#
+# Renders the whole scope in a single awk pass: relative time is computed from
+# a single "now", and titles are joined from the on-disk cache. Only sessions
+# missing from the cache trigger a (subprocess) title extraction beforehand.
 agent_handoff_sessions_display() {
   local index="$1" scope="$2"
+  local cache now
+  cache="$(agent_handoff_home)/cache/titles.tsv"
+  now="$(date +%s)"
+
+  # Fill cache misses first (no-op when every title is already cached).
   printf '%s\n' "$index" |
-    awk -F '\t' -v s="$scope" -v p="${scope%/}/" '$1 == s || index($1, p) == 1' |
-    while IFS=$'\t' read -r pcwd agent_id agent_label file mtime; do
-      local title rel folder
-      title="$(agent_handoff_session_title_cached "$agent_id" "$file" "$mtime")"
-      rel="$(agent_handoff_reltime "$mtime")"
-      if [[ "$pcwd" == "$scope" ]]; then
-        folder="·"
-      else
-        folder="${pcwd#"${scope%/}/"}"
-      fi
-      folder="${folder:0:24}"
-      printf -v folder '%s%*s' "$folder" $((24 - ${#folder})) ''
-      printf '\033[33m%-8s\033[0m  \033[2m%-11s\033[0m  \033[2m%s\033[0m  %s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$rel" "$agent_label" "$folder" "$title" \
-        "$pcwd" "$agent_id" "$agent_label" "$file" "$title"
-    done
+    awk -F '\t' -v s="$scope" -v p="${scope%/}/" '
+      $1 == s || index($1, p) == 1 { print $2 "\t" $4 "\t" $5 }' |
+    agent_handoff_fill_title_cache "$cache"
+
+  # Single pass: load cache, then format each in-scope session row.
+  printf '%s\n' "$index" |
+    awk -F '\t' -v s="$scope" -v p="${scope%/}/" -v now="$now" -v cache="$cache" '
+      BEGIN {
+        while ((getline line < cache) > 0) {
+          nf = split(line, a, "\t")
+          if (nf >= 3) title[a[1] SUBSEP a[2]] = a[3]
+        }
+      }
+      $1 != s && index($1, p) != 1 { next }
+      {
+        pcwd = $1; agent_id = $2; agent_label = $3; file = $4; mtime = $5
+        t = title[file SUBSEP mtime]
+        if (t == "") t = file
+
+        d = now - mtime
+        if (mtime !~ /^[0-9]+$/) rel = "?"
+        else if (d < 60)    rel = "now"
+        else if (d < 3600)  rel = int(d/60) "m ago"
+        else if (d < 86400) rel = int(d/3600) "h ago"
+        else                rel = int(d/86400) "d ago"
+
+        if (pcwd == s) folder = "\xc2\xb7"            # middot
+        else { folder = pcwd; sub("^" p, "", folder) }
+        folder = substr(folder, 1, 24)
+
+        printf "\033[33m%-8s\033[0m  \033[2m%-11s\033[0m  \033[2m%-24s\033[0m  %s\t%s\t%s\t%s\t%s\t%s\n",
+          rel, agent_label, folder, t, pcwd, agent_id, agent_label, file, t
+      }'
 }
 
 # Offer to install fzf on the spot; returns 0 once fzf is available.
