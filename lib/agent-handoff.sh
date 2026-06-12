@@ -359,12 +359,46 @@ agent_handoff_browse() {
     return
   fi
 
-  # --header-first needs fzf >= 0.31; degrade gracefully on older versions.
-  local header_first="--header-first"
-  fzf --help 2>&1 | grep -q -- '--header-first' || header_first=""
+  # transform-header (used to repaint the header on reload) needs fzf >= 0.36;
+  # older versions fall back to the redraw loop.
+  local fzf_minor
+  fzf_minor="$(fzf --version 2>/dev/null | sed -E 's/^[0-9]+\.([0-9]+).*/\1/')"
+  if [[ ! "$fzf_minor" =~ ^[0-9]+$ ]] || (( fzf_minor < 36 )); then
+    agent_handoff_browse_redraw "$index"
+    return
+  fi
 
-  # Start at the current directory, climbing up until sessions exist in scope.
-  local scope="$PWD"
+  # Share state with the fzf-spawned renderer/navigator through a temp dir.
+  local state
+  state="$(mktemp -d)"
+  printf '%s\n' "$index" > "$state/index"
+  agent_handoff_initial_scope "$index" > "$state/scope"
+
+  local title_line=$'\033[1;36mHand off a previous session\033[0m'
+
+  # left/right rewrite the scope file (via __nav) then reload the list and
+  # repaint the header; fzf itself never exits, so the frame stays put.
+  local self="$AGENT_HANDOFF_ROOT/bin/agent-handoff"
+  local reload="reload(AGENT_HANDOFF_STATE=$state $self __render)"
+  local rehead="transform-header(AGENT_HANDOFF_STATE=$state $self __header)"
+  local sel
+  sel="$(AGENT_HANDOFF_STATE="$state" "$self" __render |
+    fzf --ansi --prompt='Type to search: ' --layout=reverse --header-first \
+      --header="$(AGENT_HANDOFF_STATE="$state" "$self" __header)" \
+      --delimiter=$'\t' --with-nth=1 \
+      --bind "left:execute-silent(AGENT_HANDOFF_STATE=$state $self __nav up)+$reload+$rehead" \
+      --bind "right:execute-silent(AGENT_HANDOFF_STATE=$state $self __nav down {2})+$reload+$rehead")" || {
+    rm -rf "$state"
+    return 1
+  }
+  rm -rf "$state"
+  [[ -n "$sel" ]] || return 1
+  printf '%s\n' "$sel"
+}
+
+# Climb from the current directory until sessions exist in scope.
+agent_handoff_initial_scope() {
+  local index="$1" scope="$PWD"
   while [[ "$scope" != "/" ]]; do
     if printf '%s\n' "$index" |
       awk -F '\t' -v s="$scope" -v p="${scope%/}/" '$1 == s || index($1, p) == 1 { found = 1; exit } END { exit !found }'; then
@@ -372,14 +406,77 @@ agent_handoff_browse() {
     fi
     scope="$(dirname "$scope")"
   done
+  printf '%s\n' "$scope"
+}
 
+agent_handoff_scope_can_down() {
+  local index="$1" scope="$2"
+  printf '%s\n' "$index" |
+    awk -F '\t' -v s="$scope" -v p="${scope%/}/" 'index($1, p) == 1 && $1 != s { found = 1; exit } END { exit !found }'
+}
+
+# __render: print the session list for the scope recorded in the state dir.
+agent_handoff_render() {
+  local state="$AGENT_HANDOFF_STATE" index scope
+  index="$(cat "$state/index")"
+  scope="$(cat "$state/scope")"
+  agent_handoff_sessions_display "$index" "$scope"
+}
+
+# __header: print the (fixed-height) header for the current scope.
+agent_handoff_render_header() {
+  local state="$AGENT_HANDOFF_STATE" index scope
+  index="$(cat "$state/index")"
+  scope="$(cat "$state/scope")"
+
+  local can_up=1 can_down=0
+  [[ "$scope" == "/" ]] && can_up=0
+  agent_handoff_scope_can_down "$index" "$scope" && can_down=1
+
+  local help="enter hand off   esc exit"
+  [[ "$can_up" == 1 ]] && help="$help   ← up folder"
+  [[ "$can_down" == 1 ]] && help="$help   → into folder"
+  help="$help   ↑/↓ browse"
+
+  printf '\033[1;36mHand off a previous session\033[0m\n'
+  printf 'Folder: \033[35m%s\033[0m\n' "${scope/#$HOME/~}"
+  printf '\033[2m%s\033[0m\n' "$help"
+}
+
+# __nav up|down [target]: move the scope up to the parent or down into a child.
+agent_handoff_nav() {
+  local state="$AGENT_HANDOFF_STATE" dir="$1" target="${2:-}"
+  local index scope
+  index="$(cat "$state/index")"
+  scope="$(cat "$state/scope")"
+
+  case "$dir" in
+    up)
+      [[ "$scope" == "/" ]] || scope="$(dirname "$scope")"
+      ;;
+    down)
+      if [[ -n "$target" && "$target" != "$scope" ]] &&
+        printf '%s\n' "$index" | awk -F '\t' -v t="$target" '$1 == t || index($1, t"/") == 1 { f=1; exit } END { exit !f }'; then
+        scope="$target"
+      fi
+      ;;
+  esac
+  printf '%s\n' "$scope" > "$state/scope"
+}
+
+# Pre-reload redraw loop for fzf versions without reload/transform bindings.
+agent_handoff_browse_redraw() {
+  local index="$1"
+  local header_first="--header-first"
+  fzf --help 2>&1 | grep -q -- '--header-first' || header_first=""
+
+  local scope
+  scope="$(agent_handoff_initial_scope "$index")"
   local title_line=$'\033[1;36mHand off a previous session\033[0m'
 
   local lines out key query sel target scope_line can_up can_down expect query=""
   while :; do
     lines="$(agent_handoff_spinner 'Loading sessions...' agent_handoff_sessions_display "$index" "$scope")"
-
-    # A child folder exists when some session's cwd sits strictly below scope.
     if printf '%s\n' "$lines" |
       awk -F '\t' -v s="$scope" '$2 != s && $2 != "" { found = 1; exit } END { exit !found }'; then
       can_down=1
@@ -388,7 +485,6 @@ agent_handoff_browse() {
     fi
     [[ "$scope" == "/" ]] && can_up=0 || can_up=1
 
-    # Only bind the arrows that actually do something, so a dead-end key is inert.
     expect=""
     [[ "$can_up" == 1 ]] && expect="left"
     [[ "$can_down" == 1 ]] && expect="${expect:+$expect,}right"
@@ -398,11 +494,8 @@ agent_handoff_browse() {
     [[ "$can_down" == 1 ]] && help="$help   → into folder"
     help="$help   ↑/↓ browse"
     local help_line=$'\033[2m'"$help"$'\033[0m'
-
     scope_line="Folder: "$'\033[35m'"${scope/#$HOME/~}"$'\033[0m'
 
-    # With --print-query the first output line is the query. --expect adds a
-    # key line before the selection; without it, the selection follows directly.
     # shellcheck disable=SC2086
     out="$(printf '%s\n' "$lines" |
       fzf --ansi --prompt='Type to search: ' --layout=reverse $header_first \
@@ -629,6 +722,19 @@ agent_handoff_main() {
     __test_list_projects)
       agent_handoff_requirements
       agent_handoff_list_projects
+      return
+      ;;
+    __render)
+      agent_handoff_render
+      return
+      ;;
+    __header)
+      agent_handoff_render_header
+      return
+      ;;
+    __nav)
+      shift
+      agent_handoff_nav "$@"
       return
       ;;
     update | --update | upgrade)
