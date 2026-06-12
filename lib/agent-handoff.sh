@@ -20,6 +20,13 @@ agent_handoff_mtimes() {
   stat -f '%m' "$@" 2>/dev/null || stat -c '%Y' "$@" 2>/dev/null
 }
 
+# A change token that moves whenever the file changes, even within the same
+# mtime second: "mtime.size". Used as the cache key so a /rename (which appends
+# a custom-title record, growing the file) always invalidates a stale title.
+agent_handoff_stamps() {
+  stat -f '%m.%z' "$@" 2>/dev/null || stat -c '%Y.%s' "$@" 2>/dev/null
+}
+
 agent_handoff_project_key() {
   local cwd="$1"
   cwd="${cwd%/}"
@@ -99,12 +106,12 @@ agent_handoff_scan_claude() {
     cwd="$(agent_handoff_claude_dir_cwd "$dir")"
     [[ -n "$cwd" ]] || continue
 
-    local mtimes=() line
-    while IFS= read -r line; do mtimes+=("$line"); done < <(agent_handoff_mtimes "${files[@]}")
+    local stamps=() line
+    while IFS= read -r line; do stamps+=("$line"); done < <(agent_handoff_stamps "${files[@]}")
 
     local i
     for i in "${!files[@]}"; do
-      printf '%s\t%s\t%s\t%s\t%s\n' "$cwd" "claude" "Claude Code" "${files[i]}" "${mtimes[i]:-0}"
+      printf '%s\t%s\t%s\t%s\t%s\n' "$cwd" "claude" "Claude Code" "${files[i]}" "${stamps[i]:-0}"
     done
   done
 }
@@ -119,7 +126,7 @@ agent_handoff_scan_codex() {
     < <(find "$base" -type f -name 'rollout-*.jsonl' -print0 2>/dev/null)
   (( ${#files[@]} > 0 )) || return 0
 
-  local cwds=() mtimes=() line
+  local cwds=() stamps=() line
   while IFS= read -r line; do cwds+=("$line"); done < <(
     for f in "${files[@]}"; do
       line=""
@@ -127,12 +134,20 @@ agent_handoff_scan_codex() {
       printf '%s\n' "$line"
     done | jq -Rr '(fromjson? | objects | .payload.cwd?) // ""' 2>/dev/null
   )
-  while IFS= read -r line; do mtimes+=("$line"); done < <(agent_handoff_mtimes "${files[@]}")
+  while IFS= read -r line; do stamps+=("$line"); done < <(agent_handoff_stamps "${files[@]}")
+
+  # Codex stores /rename names in session_index.jsonl, not in the rollout file,
+  # so a rename leaves the rollout's mtime/size untouched. Fold that index's
+  # mtime into every Codex stamp: when someone renames a thread the index
+  # changes, every Codex stamp shifts, and stale titles get re-extracted.
+  local index_mtime
+  index_mtime="$(agent_handoff_mtimes "$(agent_handoff_codex_home)/session_index.jsonl" 2>/dev/null || true)"
+  [[ -n "$index_mtime" ]] || index_mtime=0
 
   local i
   for i in "${!files[@]}"; do
     [[ -n "${cwds[i]:-}" ]] || continue
-    printf '%s\t%s\t%s\t%s\t%s\n' "${cwds[i]}" "codex" "Codex" "${files[i]}" "${mtimes[i]:-0}"
+    printf '%s\t%s\t%s\t%s\t%s\n' "${cwds[i]}" "codex" "Codex" "${files[i]}" "${stamps[i]:-0}-${index_mtime}"
   done
 }
 
@@ -148,14 +163,15 @@ agent_handoff_list_projects() {
     awk -F '\t' '
       {
         cwd=$1
+        mt=int($5)            # $5 is a change stamp ("mtime.size[-idx]")
         if (!(cwd in seen)) {
           order[++n]=cwd
-          latest[cwd]=$5
+          latest[cwd]=mt
         }
         seen[cwd]=1
         if ($2 == "claude") claude[cwd]++
         if ($2 == "codex") codex[cwd]++
-        if ($5 > latest[cwd]) latest[cwd]=$5
+        if (mt > latest[cwd]) latest[cwd]=mt
       }
       END {
         for (i=1; i<=n; i++) {
@@ -196,6 +212,10 @@ agent_handoff_custom_title() {
   esac
 }
 
+# Resolves a session's title. A /rename name wins; otherwise the latest user
+# message, then an agent-specific fallback. The whole result is cached, keyed
+# by the file's change stamp (mtime.size), so a rename — which appends a
+# custom-title record and grows the file — invalidates the cached title.
 agent_handoff_session_title() {
   local agent="$1" file="$2" title=""
 
@@ -274,7 +294,9 @@ agent_handoff_reltime() {
 }
 
 # Ensure titles for the given sessions are in the cache, extracting (slowly)
-# only the ones that are missing. Reads "agent<TAB>file<TAB>mtime" lines.
+# only the ones that are missing. Reads "agent<TAB>file<TAB>stamp" lines, where
+# stamp is "mtime.size" — so any change to the file (including a /rename that
+# appends a custom-title record) is a cache miss and re-extracts the title.
 # Cache membership is resolved in a single awk pass, so a fully-warm cache
 # costs one awk run rather than one per session.
 agent_handoff_fill_title_cache() {
@@ -282,11 +304,11 @@ agent_handoff_fill_title_cache() {
   mkdir -p "$(dirname "$cache")"
   touch "$cache"
 
-  local agent file mtime title
-  while IFS=$'\t' read -r agent file mtime; do
+  local agent file stamp title
+  while IFS=$'\t' read -r agent file stamp title; do
     [[ -n "$file" ]] || continue
     title="$(agent_handoff_session_title "$agent" "$file")"
-    printf '%s\t%s\t%s\n' "$file" "$mtime" "$title" >> "$cache"
+    printf '%s\t%s\t%s\n' "$file" "$stamp" "$title" >> "$cache"
   done < <(
     awk -F '\t' -v cache="$cache" '
       BEGIN { while ((getline l < cache) > 0) { split(l, a, "\t"); seen[a[1] SUBSEP a[2]] = 1 } }
@@ -324,12 +346,13 @@ agent_handoff_sessions_display() {
       }
       $1 != s && index($1, p) != 1 { next }
       {
-        pcwd = $1; agent_id = $2; agent_label = $3; file = $4; mtime = $5
-        t = title[file SUBSEP mtime]
+        pcwd = $1; agent_id = $2; agent_label = $3; file = $4; stamp = $5
+        t = title[file SUBSEP stamp]
         if (t == "") t = file
 
+        mtime = int(stamp)          # stamp is "mtime.size"; relative time uses mtime
         d = now - mtime
-        if (mtime !~ /^[0-9]+$/) rel = "?"
+        if (stamp !~ /^[0-9]/) rel = "?"
         else if (d < 60)    rel = "now"
         else if (d < 3600)  rel = int(d/60) "m ago"
         else if (d < 86400) rel = int(d/3600) "h ago"
