@@ -563,6 +563,16 @@ Usage:
   agent-handoff update     Update agent-handoff to the latest version
   agent-handoff version    Print the installed version
   agent-handoff help       Show this help
+
+In the browser:
+  ↑/↓     browse sessions
+  ←/→     parent / child folder
+  type    search
+  enter   pick this session
+  esc     quit
+
+After picking a session, choose the target agent, then press enter
+to launch it (esc to cancel).
 EOF
 }
 

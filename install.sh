@@ -127,5 +127,7 @@ else
   fi
 fi
 
-printf '\n  %sDone!%s Restart your shell, then run %s%sagent-handoff%s\n\n' \
+printf '\n  %sDone!%s Restart your shell, then run %s%sagent-handoff%s\n' \
   "$green$bold" "$reset" "$bold" "$cyan" "$reset"
+printf '  %sNew here? Run %sagent-handoff help%s%s for the keys.%s\n\n' \
+  "$dim" "$reset$bold" "$reset" "$dim" "$reset"
