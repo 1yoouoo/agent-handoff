@@ -177,8 +177,29 @@ test_confirm_accepts_yes_and_rejects_no() {
   pass "confirm accepts yes and rejects no"
 }
 
+test_help_and_version_and_update() {
+  local output
+
+  output="$("$ROOT_DIR/bin/agent-handoff" help)"
+  assert_contains "$output" "agent-handoff update" "help output"
+
+  output="$("$ROOT_DIR/bin/agent-handoff" badarg 2>&1 || true)"
+  assert_contains "$output" "Unknown argument" "unknown arg"
+
+  # version/update on a non-git install dir degrade gracefully.
+  local tmp
+  tmp="$(mktemp -d)"
+  output="$(AGENT_HANDOFF_INSTALL_DIR="$tmp" "$ROOT_DIR/bin/agent-handoff" version)"
+  assert_contains "$output" "unknown" "version without git checkout"
+
+  output="$(AGENT_HANDOFF_INSTALL_DIR="$tmp" "$ROOT_DIR/bin/agent-handoff" update 2>&1 || true)"
+  assert_contains "$output" "cannot self-update" "update without git checkout"
+  pass "help, version, and update behave"
+}
+
 test_lists_projects_from_both_agents
 test_creates_raw_handoff_and_dry_runs_target
 test_codex_session_uses_first_user_message_as_title
 test_install_adds_path_to_zsh_profile_once
 test_confirm_accepts_yes_and_rejects_no
+test_help_and_version_and_update

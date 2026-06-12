@@ -40,6 +40,14 @@ A session browser opens scoped to your current directory (climbing up until it f
 
 After picking a session, choose the agent that should continue it. A summary is shown, and on confirmation the target agent launches.
 
+### Other commands
+
+```sh
+agent-handoff update     # pull the latest version
+agent-handoff version    # print the installed version
+agent-handoff help       # show usage
+```
+
 ## How it works
 
 1. Scans session transcripts in `~/.claude/projects` and `~/.codex/sessions`. Only the first and last lines of each file are read, and titles are cached on disk, so scanning stays fast.
@@ -64,7 +72,7 @@ Override the launch commands to add flags, e.g. `export AGENT_HANDOFF_CLAUDE_CMD
 - `fzf` — optional; falls back to numbered prompts without it
 - `git` — install only
 
-The installer offers to install `jq` and `fzf` for you if they are missing — via your package manager, or by downloading the official release binaries when no package manager is available.
+The installer offers to install `jq` and `fzf` for you if they are missing.
 
 ## License
 

@@ -1,5 +1,3 @@
 .DS_Store
 .agent-handoff/
 tmp/
-bin/fzf
-bin/jq
