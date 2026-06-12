@@ -374,29 +374,55 @@ agent_handoff_browse() {
   done
 
   local title_line=$'\033[1;36mHand off a previous session\033[0m'
-  local help_line=$'\033[2menter hand off   esc exit   ← up folder   → into folder   ↑/↓ browse\033[0m'
 
-  local lines out key sel target scope_line
+  local lines out key query sel target scope_line can_up can_down expect query=""
   while :; do
     lines="$(agent_handoff_spinner 'Loading sessions...' agent_handoff_sessions_display "$index" "$scope")"
+
+    # A child folder exists when some session's cwd sits strictly below scope.
+    if printf '%s\n' "$lines" |
+      awk -F '\t' -v s="$scope" '$2 != s && $2 != "" { found = 1; exit } END { exit !found }'; then
+      can_down=1
+    else
+      can_down=0
+    fi
+    [[ "$scope" == "/" ]] && can_up=0 || can_up=1
+
+    # Only bind the arrows that actually do something, so a dead-end key is inert.
+    expect=""
+    [[ "$can_up" == 1 ]] && expect="left"
+    [[ "$can_down" == 1 ]] && expect="${expect:+$expect,}right"
+
+    local help="enter hand off   esc exit"
+    [[ "$can_up" == 1 ]] && help="$help   ← up folder"
+    [[ "$can_down" == 1 ]] && help="$help   → into folder"
+    help="$help   ↑/↓ browse"
+    local help_line=$'\033[2m'"$help"$'\033[0m'
+
     scope_line="Folder: "$'\033[35m'"${scope/#$HOME/~}"$'\033[0m'
+
+    # With --print-query the first output line is the query. --expect adds a
+    # key line before the selection; without it, the selection follows directly.
     # shellcheck disable=SC2086
     out="$(printf '%s\n' "$lines" |
       fzf --ansi --prompt='Type to search: ' --layout=reverse $header_first \
         --header="$title_line
 $scope_line
 $help_line" \
-        --delimiter=$'\t' --with-nth=1 --expect=left,right)" || return 1
-    key="${out%%$'\n'*}"
-    sel="${out#*$'\n'}"
+        --query="$query" --print-query \
+        --delimiter=$'\t' --with-nth=1 --expect="${expect:-ctrl-z}")" || return 1
+    query="$(printf '%s\n' "$out" | sed -n '1p')"
+    key="$(printf '%s\n' "$out" | sed -n '2p')"
+    sel="$(printf '%s\n' "$out" | sed -n '3p')"
     case "$key" in
       left)
-        [[ "$scope" == "/" ]] || scope="$(dirname "$scope")"
+        [[ "$scope" == "/" ]] || { scope="$(dirname "$scope")"; query=""; }
         ;;
       right)
         target="$(printf '%s\n' "$sel" | awk -F '\t' '{print $2}')"
         if [[ -n "$target" && "$target" != "$scope" ]]; then
           scope="$target"
+          query=""
         fi
         ;;
       *)
