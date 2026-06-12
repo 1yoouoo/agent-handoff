@@ -60,6 +60,50 @@ else
     pm="sudo pacman -S --noconfirm"
   fi
 
+  # Download a pinned official release binary into bin_dir (already on PATH).
+  download_tool() {
+    dl_os="$(uname -s)"
+    dl_arch="$(uname -m)"
+    case "$dl_arch" in
+      arm64 | aarch64) dl_arch="arm64" ;;
+      x86_64 | amd64) dl_arch="amd64" ;;
+      *) return 1 ;;
+    esac
+    case "$1" in
+      fzf)
+        case "$dl_os" in
+          Darwin) dl_os="darwin" ;;
+          Linux) dl_os="linux" ;;
+          *) return 1 ;;
+        esac
+        dl_tmp="$(mktemp -d)"
+        if curl -fsSL "https://github.com/junegunn/fzf/releases/download/v0.73.1/fzf-0.73.1-${dl_os}_${dl_arch}.tar.gz" -o "$dl_tmp/fzf.tar.gz" &&
+          tar -xzf "$dl_tmp/fzf.tar.gz" -C "$dl_tmp"; then
+          mv "$dl_tmp/fzf" "$bin_dir/fzf"
+          chmod +x "$bin_dir/fzf"
+          rm -rf "$dl_tmp"
+          return 0
+        fi
+        rm -rf "$dl_tmp"
+        return 1
+        ;;
+      jq)
+        case "$dl_os" in
+          Darwin) dl_os="macos" ;;
+          Linux) dl_os="linux" ;;
+          *) return 1 ;;
+        esac
+        if curl -fsSL "https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-${dl_os}-${dl_arch}" -o "$bin_dir/jq"; then
+          chmod +x "$bin_dir/jq"
+          return 0
+        fi
+        rm -f "$bin_dir/jq"
+        return 1
+        ;;
+    esac
+    return 1
+  }
+
   installed=0
   if [ -n "$pm" ]; then
     # Ask on the terminal directly so this works under `curl | sh`.
@@ -73,6 +117,25 @@ else
             installed=1
             ok "Installed$missing"
           fi
+          ;;
+      esac
+    fi
+  elif command -v curl >/dev/null 2>&1; then
+    if { printf '  %s?%s Missing:%s%s%s — no package manager found. Download official binaries to %s? [Y/n] ' \
+        "$yellow" "$reset" "$bold" "$missing" "$reset" "$(pretty "$bin_dir")" > /dev/tty; } 2>/dev/null &&
+      read -r answer < /dev/tty 2>/dev/null; then
+      case "$answer" in
+        '' | [yY] | [yY][eE][sS])
+          installed=1
+          for tool in $missing; do
+            printf '  %s… Downloading %s%s\n' "$dim" "$tool" "$reset"
+            if download_tool "$tool"; then
+              ok "Downloaded $tool"
+            else
+              installed=0
+              warn "Failed to download $tool"
+            fi
+          done
           ;;
       esac
     fi

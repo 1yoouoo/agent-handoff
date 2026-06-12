@@ -29,10 +29,65 @@ agent_handoff_project_key() {
 }
 
 agent_handoff_requirements() {
-  if ! command -v jq >/dev/null 2>&1; then
+  # Pick up tools downloaded by the installer or a previous run.
+  PATH="$(agent_handoff_home)/bin:$PATH"
+
+  if ! command -v jq >/dev/null 2>&1 && ! agent_handoff_offer_tool jq; then
     printf 'agent-handoff requires jq.\n' >&2
     exit 1
   fi
+}
+
+# Download a pinned official release binary into the agent-handoff bin dir.
+agent_handoff_download_tool() {
+  local tool="$1"
+  local dest os arch url tmp
+  dest="$(agent_handoff_home)/bin"
+  os="$(uname -s)"
+  arch="$(uname -m)"
+
+  case "$arch" in
+    arm64 | aarch64) arch="arm64" ;;
+    x86_64 | amd64) arch="amd64" ;;
+    *) return 1 ;;
+  esac
+
+  case "$tool" in
+    fzf)
+      case "$os" in
+        Darwin) os="darwin" ;;
+        Linux) os="linux" ;;
+        *) return 1 ;;
+      esac
+      url="https://github.com/junegunn/fzf/releases/download/v0.73.1/fzf-0.73.1-${os}_${arch}.tar.gz"
+      tmp="$(mktemp -d)"
+      if curl -fsSL "$url" -o "$tmp/fzf.tar.gz" && tar -xzf "$tmp/fzf.tar.gz" -C "$tmp"; then
+        mkdir -p "$dest"
+        mv "$tmp/fzf" "$dest/fzf"
+        chmod +x "$dest/fzf"
+        rm -rf "$tmp"
+        return 0
+      fi
+      rm -rf "$tmp"
+      return 1
+      ;;
+    jq)
+      case "$os" in
+        Darwin) os="macos" ;;
+        Linux) os="linux" ;;
+        *) return 1 ;;
+      esac
+      url="https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-${os}-${arch}"
+      mkdir -p "$dest"
+      if curl -fsSL "$url" -o "$dest/jq"; then
+        chmod +x "$dest/jq"
+        return 0
+      fi
+      rm -f "$dest/jq"
+      return 1
+      ;;
+  esac
+  return 1
 }
 
 agent_handoff_spinner() {
@@ -271,8 +326,11 @@ agent_handoff_sessions_display() {
     done
 }
 
-# Offer to install fzf on the spot; returns 0 once fzf is available.
-agent_handoff_offer_fzf() {
+# Offer to install a missing tool on the spot; returns 0 once it is available.
+# Uses the system package manager when present, otherwise downloads the
+# official release binary into the agent-handoff bin dir.
+agent_handoff_offer_tool() {
+  local tool="$1"
   [[ -t 0 && -t 2 ]] || return 1
 
   local pm=""
@@ -285,23 +343,39 @@ agent_handoff_offer_fzf() {
   elif command -v pacman >/dev/null 2>&1; then
     pm="sudo pacman -S --noconfirm"
   fi
-  [[ -n "$pm" ]] || return 1
 
-  printf 'fzf not found — it powers the interactive browser.\nInstall with "%s fzf"? [Y/n] ' "$pm" >&2
   local answer
+  if [[ -n "$pm" ]]; then
+    printf '%s not found. Install with "%s %s"? [Y/n] ' "$tool" "$pm" "$tool" >&2
+    read -r answer || return 1
+    case "$answer" in
+      '' | [yY] | [yY][eE][sS]) ;;
+      *) return 1 ;;
+    esac
+    printf 'Installing %s...\n' "$tool" >&2
+    if $pm "$tool" >/dev/null; then
+      hash -r
+      command -v "$tool" >/dev/null 2>&1
+      return
+    fi
+    return 1
+  fi
+
+  command -v curl >/dev/null 2>&1 || return 1
+  printf '%s not found and no package manager detected.\nDownload the official binary to %s? [Y/n] ' \
+    "$tool" "$(agent_handoff_home)/bin" >&2
   read -r answer || return 1
   case "$answer" in
     '' | [yY] | [yY][eE][sS]) ;;
     *) return 1 ;;
   esac
-
-  printf 'Installing fzf...\n' >&2
-  if $pm fzf >/dev/null; then
+  printf 'Downloading %s...\n' "$tool" >&2
+  if agent_handoff_download_tool "$tool"; then
     hash -r
-    command -v fzf >/dev/null 2>&1
-  else
-    return 1
+    command -v "$tool" >/dev/null 2>&1
+    return
   fi
+  return 1
 }
 
 agent_handoff_pick_from_lines() {
@@ -350,7 +424,7 @@ agent_handoff_browse() {
     return
   fi
 
-  if ! command -v fzf >/dev/null 2>&1 && ! agent_handoff_offer_fzf; then
+  if ! command -v fzf >/dev/null 2>&1 && ! agent_handoff_offer_tool fzf; then
     printf 'Using numbered prompts. Install fzf for the interactive browser.\n' >&2
     local cwd
     cwd="$(agent_handoff_pick_from_lines "Project" "" "$(printf '%s\n' "${projects[@]}")")" || return 1

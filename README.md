@@ -64,7 +64,7 @@ Override the launch commands to add flags, e.g. `export AGENT_HANDOFF_CLAUDE_CMD
 - `fzf` — optional; falls back to numbered prompts without it
 - `git` — install only
 
-The installer offers to install `jq` and `fzf` for you if they are missing.
+The installer offers to install `jq` and `fzf` for you if they are missing — via your package manager, or by downloading the official release binaries when no package manager is available.
 
 ## License
 
