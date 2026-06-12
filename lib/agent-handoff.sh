@@ -455,13 +455,27 @@ agent_handoff_target_command_source() {
 
 agent_handoff_confirm() {
   [[ "${AGENT_HANDOFF_ASSUME_YES:-}" == "1" ]] && return 0
-  printf 'Continue? [Y/n] '
-  local answer
-  read -r answer
-  case "$answer" in
-    '' | [yY] | [yY][eE][sS]) return 0 ;;
-    *) return 1 ;;
-  esac
+
+  # Without a terminal there is no key to read; fall back to a yes/no line.
+  if [[ ! -t 0 ]]; then
+    printf 'Continue? [Y/n] '
+    local answer
+    read -r answer
+    case "$answer" in
+      '' | [yY] | [yY][eE][sS]) return 0 ;;
+      *) return 1 ;;
+    esac
+  fi
+
+  printf '\033[2mPress Enter to continue · Esc to cancel\033[0m '
+  local key
+  while IFS= read -rsn1 key; do
+    case "$key" in
+      '') printf '\n'; return 0 ;;        # Enter
+      $'\e') printf '\033[2m cancelled\033[0m\n'; return 1 ;;  # Esc
+    esac
+  done
+  return 1
 }
 
 agent_handoff_copy_raw() {

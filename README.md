@@ -38,7 +38,7 @@ A session browser opens scoped to your current directory (climbing up until it f
 | `Enter` | Pick a session |
 | `Esc` | Exit |
 
-After picking a session, choose the agent that should continue it. A summary is shown, and on confirmation the target agent launches.
+After picking a session, choose the agent that should continue it. A summary is shown; press `Enter` to launch the target agent or `Esc` to cancel.
 
 ### Other commands
 
