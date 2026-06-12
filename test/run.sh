@@ -154,6 +154,50 @@ EOF
   pass "claude title falls back to ai-title when no real user message"
 }
 
+test_rename_title_takes_priority() {
+  local tmp project claude_dir codex_dir output
+
+  # Claude: a custom-title (set via /rename) overrides the latest message.
+  tmp="$(mktemp -d)"
+  project="$tmp/work/app"
+  claude_dir="$tmp/claude/projects/${project//\//-}"
+  mkdir -p "$project" "$claude_dir" "$tmp/codex/sessions"
+  cat > "$claude_dir/s.jsonl" <<EOF
+{"type":"user","sessionId":"a","cwd":"$project","message":{"role":"user","content":"first message"}}
+{"type":"custom-title","sessionId":"a","customTitle":"My renamed session"}
+{"type":"user","sessionId":"a","cwd":"$project","message":{"role":"user","content":"a later message"}}
+EOF
+  output="$(
+    AGENT_HANDOFF_HOME="$tmp/out" AGENT_HANDOFF_CLAUDE_HOME="$tmp/claude" \
+    AGENT_HANDOFF_CODEX_HOME="$tmp/codex" AGENT_HANDOFF_PICK_PROJECT=1 \
+    AGENT_HANDOFF_PICK_SESSION=1 AGENT_HANDOFF_PICK_TARGET=codex \
+    AGENT_HANDOFF_ASSUME_YES=1 AGENT_HANDOFF_DRY_RUN=1 \
+    "$ROOT_DIR/bin/agent-handoff"
+  )"
+  assert_contains "$output" "My renamed session" "claude custom-title priority"
+
+  # Codex: thread_name from session_index.jsonl overrides the message.
+  tmp="$(mktemp -d)"
+  project="$tmp/work/cdx"
+  codex_dir="$tmp/codex/sessions/2026/06/12"
+  mkdir -p "$project" "$codex_dir" "$tmp/claude/projects"
+  cat > "$codex_dir/rollout-x.jsonl" <<EOF
+{"type":"session_meta","payload":{"id":"cdx-9","cwd":"$project"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"some message"}]}}
+EOF
+  printf '%s\n' '{"id":"cdx-9","thread_name":"Codex renamed thread","updated_at":"x"}' \
+    > "$tmp/codex/session_index.jsonl"
+  output="$(
+    AGENT_HANDOFF_HOME="$tmp/out" AGENT_HANDOFF_CLAUDE_HOME="$tmp/claude" \
+    AGENT_HANDOFF_CODEX_HOME="$tmp/codex" AGENT_HANDOFF_PICK_PROJECT=1 \
+    AGENT_HANDOFF_PICK_SESSION=1 AGENT_HANDOFF_PICK_TARGET=claude \
+    AGENT_HANDOFF_ASSUME_YES=1 AGENT_HANDOFF_DRY_RUN=1 \
+    "$ROOT_DIR/bin/agent-handoff"
+  )"
+  assert_contains "$output" "Codex renamed thread" "codex thread_name priority"
+  pass "rename (custom-title / thread_name) takes priority"
+}
+
 test_install_adds_path_to_zsh_profile_once() {
   local tmp
   tmp="$(mktemp -d)"
@@ -231,6 +275,7 @@ test_lists_projects_from_both_agents
 test_creates_raw_handoff_and_dry_runs_target
 test_codex_session_uses_first_user_message_as_title
 test_claude_title_falls_back_to_ai_title
+test_rename_title_takes_priority
 test_install_adds_path_to_zsh_profile_once
 test_confirm_accepts_yes_and_rejects_no
 test_help_and_version_and_update

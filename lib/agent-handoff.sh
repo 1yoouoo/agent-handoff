@@ -171,8 +171,41 @@ agent_handoff_codex_session_id() {
     jq -Rr '(fromjson? | objects | .payload.id?) // empty' 2>/dev/null
 }
 
+# A name the user set with /rename, if any. Claude stores it inline as a
+# custom-title record; Codex keeps it in session_index.jsonl keyed by id.
+agent_handoff_custom_title() {
+  local agent="$1" file="$2"
+
+  case "$agent" in
+    claude)
+      tail -n 400 "$file" 2>/dev/null |
+        jq -Rr 'fromjson? | objects | select(.type == "custom-title") | .customTitle // empty' 2>/dev/null |
+        awk 'NF { last = $0 } END { if (last != "") print last }'
+      ;;
+    codex)
+      local index id
+      index="$(agent_handoff_codex_home)/session_index.jsonl"
+      [[ -f "$index" ]] || return 0
+      id="$(agent_handoff_codex_session_id "$file")"
+      [[ -n "$id" ]] || return 0
+      jq -Rr --arg id "$id" '
+        fromjson? | objects | select(.id == $id)
+        | .thread_name // empty | select(. != "")
+      ' "$index" 2>/dev/null | tail -n 1
+      ;;
+  esac
+}
+
 agent_handoff_session_title() {
   local agent="$1" file="$2" title=""
+
+  # A user-set name (/rename) always wins.
+  title="$(agent_handoff_custom_title "$agent" "$file")"
+  if [[ -n "$title" ]]; then
+    title="${title//$'\t'/ }"
+    printf '%s\n' "${title:0:60}"
+    return
+  fi
 
   # A user line is noise when it's an injected/system message rather than
   # something the person typed (context blocks, caveats, image/command markers,
