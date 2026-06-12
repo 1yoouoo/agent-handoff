@@ -271,6 +271,39 @@ agent_handoff_sessions_display() {
     done
 }
 
+# Offer to install fzf on the spot; returns 0 once fzf is available.
+agent_handoff_offer_fzf() {
+  [[ -t 0 && -t 2 ]] || return 1
+
+  local pm=""
+  if command -v brew >/dev/null 2>&1; then
+    pm="brew install"
+  elif command -v apt-get >/dev/null 2>&1; then
+    pm="sudo apt-get install -y"
+  elif command -v dnf >/dev/null 2>&1; then
+    pm="sudo dnf install -y"
+  elif command -v pacman >/dev/null 2>&1; then
+    pm="sudo pacman -S --noconfirm"
+  fi
+  [[ -n "$pm" ]] || return 1
+
+  printf 'fzf not found — it powers the interactive browser.\nInstall with "%s fzf"? [Y/n] ' "$pm" >&2
+  local answer
+  read -r answer || return 1
+  case "$answer" in
+    '' | [yY] | [yY][eE][sS]) ;;
+    *) return 1 ;;
+  esac
+
+  printf 'Installing fzf...\n' >&2
+  if $pm fzf >/dev/null; then
+    hash -r
+    command -v fzf >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
 agent_handoff_pick_from_lines() {
   local prompt="$1"
   local env_name="$2"
@@ -317,8 +350,8 @@ agent_handoff_browse() {
     return
   fi
 
-  if ! command -v fzf >/dev/null 2>&1; then
-    printf 'fzf not found — using numbered prompts. Install fzf for the interactive browser.\n' >&2
+  if ! command -v fzf >/dev/null 2>&1 && ! agent_handoff_offer_fzf; then
+    printf 'Using numbered prompts. Install fzf for the interactive browser.\n' >&2
     local cwd
     cwd="$(agent_handoff_pick_from_lines "Project" "" "$(printf '%s\n' "${projects[@]}")")" || return 1
     agent_handoff_pick_from_lines "Session" "" \
