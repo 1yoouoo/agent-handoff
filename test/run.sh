@@ -124,6 +124,28 @@ test_codex_session_uses_first_user_message_as_title() {
   pass "codex session title comes from first user message"
 }
 
+test_install_adds_path_to_zsh_profile_once() {
+  local tmp
+  tmp="$(mktemp -d)"
+  mkdir -p "$tmp/home"
+
+  HOME="$tmp/home" SHELL=/bin/zsh ZDOTDIR="" \
+  AGENT_HANDOFF_REPO_URL="$ROOT_DIR" \
+    sh "$ROOT_DIR/install.sh" >/dev/null 2>&1
+
+  assert_file_exists "$tmp/home/.agent-handoff/bin/agent-handoff" "install clone"
+  assert_contains "$(cat "$tmp/home/.zshrc")" '.agent-handoff/bin' "zshrc path line"
+
+  HOME="$tmp/home" SHELL=/bin/zsh ZDOTDIR="" \
+  AGENT_HANDOFF_REPO_URL="$ROOT_DIR" \
+    sh "$ROOT_DIR/install.sh" >/dev/null 2>&1
+
+  [[ "$(grep -c 'agent-handoff/bin' "$tmp/home/.zshrc")" == "1" ]] ||
+    fail "install: PATH line duplicated on reinstall"
+  pass "install adds PATH to .zshrc exactly once"
+}
+
 test_lists_projects_from_both_agents
 test_creates_raw_handoff_and_dry_runs_target
 test_codex_session_uses_first_user_message_as_title
+test_install_adds_path_to_zsh_profile_once

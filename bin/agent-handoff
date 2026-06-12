@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve symlinks so the script finds lib/ even when installed as a symlink.
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  if [[ "$SOURCE" != /* ]]; then
+    SOURCE="$DIR/$SOURCE"
+  fi
+done
+ROOT_DIR="$(cd "$(dirname "$SOURCE")/.." && pwd)"
+
 # shellcheck source=../lib/agent-handoff.sh
 source "$ROOT_DIR/lib/agent-handoff.sh"
 
