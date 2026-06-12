@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=../lib/agent-handoff.sh
+source "$ROOT_DIR/lib/agent-handoff.sh"
+
+agent_handoff_main "$@"
