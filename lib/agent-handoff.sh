@@ -693,19 +693,55 @@ agent_handoff_confirm() {
   return 1
 }
 
-agent_handoff_copy_raw() {
+agent_handoff_copy_raw() (
   local source_file="$1"
   local source_agent="$2"
   local target_agent="$3"
   local project="$4"
-  local dir target
+  local dir target start_line snapshot
+
+  umask 077
+  snapshot="$(mktemp)" || return
+  trap 'rm -f "$snapshot"' EXIT
+  cp "$source_file" "$snapshot" || return
 
   dir="$(agent_handoff_home)/handoffs/$(agent_handoff_project_key "$project")"
   mkdir -p "$dir"
   target="$dir/$(date '+%Y%m%d-%H%M%S')-$source_agent-to-$target_agent.jsonl"
-  cp "$source_file" "$target"
+  # Keep only line numbers while scanning, so large transcripts are not
+  # loaded into memory. Tool-only records do not count as chat messages.
+  start_line="$(jq -Rn --arg agent "$source_agent" '
+    def has_text:
+      if type == "string" then length > 0
+      elif type == "array" then
+        any(.[];
+          (.type == "text" or .type == "input_text" or .type == "output_text")
+          and ((.text // "") | length > 0))
+      else false end;
+    def is_message:
+      if $agent == "claude" then
+        (.type == "user" or .type == "assistant")
+        and (.message.content | has_text)
+      else
+        .type == "response_item" and .payload.type == "message"
+        and (.payload.role == "user" or .payload.role == "assistant")
+        and (.payload.content | has_text)
+      end;
+    reduce inputs as $line ({count: 0, starts: []};
+      if ($line | (fromjson? | objects) // {} | is_message) then
+        .count += 1 | .starts = ((.starts + [input_line_number]) | .[-30:])
+      else . end)
+    | if .count > 30 then .starts[0] else 1 end
+  ' "$snapshot")" || return
+  # Preserve raw records in the retained span, plus Codex session metadata.
+  if (( start_line == 1 )); then
+    cp "$snapshot" "$target" || return
+  else
+    awk -v start="$start_line" -v agent="$source_agent" \
+      'NR >= start || (agent == "codex" && NR == 1)' "$snapshot" > "$target" || return
+  fi
   printf '%s\n' "$target"
-}
+)
 
 agent_handoff_prompt() {
   local source_label="$1"
@@ -717,6 +753,8 @@ $handoff_file
 
 Original cwd:
 $project
+
+The transcript contains at most the latest 30 user/assistant text messages, with tool records from that span. Earlier conversation may be omitted.
 
 Treat that JSONL file as the source transcript for the previous session. Read it directly, preserve the user intent and relevant tool results, then continue the work from the latest unresolved point. This is a raw cross-agent handoff, not native session import.
 EOF

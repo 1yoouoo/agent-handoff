@@ -198,6 +198,94 @@ EOF
   pass "rename (custom-title / thread_name) takes priority"
 }
 
+test_handoff_keeps_latest_30_messages() {
+  local tmp agent count source_file handoff_file first expected actual i mode
+  tmp="$(mktemp -d)"
+
+  for agent in claude codex; do
+    for count in 0 29 30 31 35; do
+      source_file="$tmp/$agent-$count.jsonl"
+      jq -cn --arg agent "$agent" --argjson count "$count" '
+        {type: "session_meta", payload: {id: "fixture", cwd: "/work/demo"}},
+        (range(1; $count + 1) as $i |
+          (if $i % 2 == 1 then "user" else "assistant" end) as $role |
+          if $agent == "claude" then
+            {type: $role, fixture_message: $i, message: {content:
+              (if $role == "user" then "message \($i)"
+               else [{type: "text", text: "message \($i)"}] end)}},
+            {type: "assistant", fixture_tool: $i, message: {content: [{type: "tool_use", id: "call-\($i)", name: "Read", input: {}}]}},
+            {type: "user", fixture_tool: $i, message: {content: [{type: "tool_result", tool_use_id: "call-\($i)", content: "result"}]}}
+          else
+            {type: "response_item", fixture_message: $i, payload: {type: "message", role: $role, content:
+              [{type: (if $role == "user" then "input_text" else "output_text" end), text: "message \($i)"}]}},
+            {type: "response_item", fixture_tool: $i, payload: {type: "function_call", call_id: "call-\($i)", name: "exec_command", arguments: "{}"}},
+            {type: "response_item", fixture_tool: $i, payload: {type: "function_call_output", call_id: "call-\($i)", output: "result"}}
+          end)
+      ' > "$source_file"
+      chmod 600 "$source_file"
+      cp "$source_file" "$tmp/original.jsonl"
+
+      handoff_file="$(
+        source "$ROOT_DIR/lib/agent-handoff.sh"
+        umask 022
+        AGENT_HANDOFF_HOME="$tmp/out/$agent/$count" \
+          agent_handoff_copy_raw "$source_file" "$agent" codex /work/demo
+      )"
+      first=1
+      (( count <= 30 )) || first=$((count - 29))
+      expected="$(for ((i=first; i<=count; i++)); do printf '%s\n' "$i"; done)"
+      actual="$(jq -r 'select(has("fixture_message")) | .fixture_message' "$handoff_file")"
+      [[ "$actual" == "$expected" ]] || fail "$agent/$count: expected latest 30 messages"
+      actual="$(jq -r 'select(has("fixture_tool")) | .fixture_tool' "$handoff_file")"
+      expected="$(for ((i=first; i<=count; i++)); do printf '%s\n%s\n' "$i" "$i"; done)"
+      [[ "$actual" == "$expected" ]] || fail "$agent/$count: tool calls and results were lost"
+
+      if (( count <= 30 )); then
+        cmp "$source_file" "$handoff_file" >/dev/null || fail "$agent/$count: short transcript changed"
+      elif [[ "$agent" == codex ]]; then
+        [[ "$(head -n 1 "$handoff_file")" == "$(head -n 1 "$source_file")" ]] || fail "codex: session metadata was lost"
+      fi
+      mode="$(stat -f '%Lp' "$handoff_file" 2>/dev/null || stat -c '%a' "$handoff_file")"
+      [[ "$mode" == 600 ]] || fail "$agent/$count: handoff permissions should be 600, got $mode"
+      cmp "$source_file" "$tmp/original.jsonl" >/dev/null || fail "$agent/$count: original transcript changed"
+    done
+  done
+  rm -rf "$tmp"
+  pass "handoffs keep the latest 30 messages and their tool records for both agents"
+}
+
+test_handoff_uses_snapshot_when_source_grows() {
+  local tmp count source_file handoff_file actual expected i first
+  tmp="$(mktemp -d)"
+  for count in 30 31; do
+    source_file="$tmp/source-$count.jsonl"
+    jq -cn --argjson count "$count" '
+      {type: "session_meta", payload: {id: "fixture", cwd: "/work/demo"}},
+      (range(1; $count + 1) as $i |
+        {type: "response_item", fixture_message: $i, payload: {type: "message", role: "user",
+          content: [{type: "input_text", text: "message \($i)"}]}})
+    ' > "$source_file"
+    handoff_file="$(
+      source "$ROOT_DIR/lib/agent-handoff.sh"
+      # Simulate an active agent appending after the cutoff scan completes.
+      jq() {
+        command jq "$@"
+        printf '%s\n' '{"type":"response_item","fixture_message":999,"payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"new message"}]}}' >> "$source_file"
+      }
+      AGENT_HANDOFF_HOME="$tmp/out/$count" \
+        agent_handoff_copy_raw "$source_file" codex claude /work/demo
+    )"
+    first=$((count - 29))
+    expected="$(for ((i=first; i<=count; i++)); do printf '%s\n' "$i"; done)"
+    actual="$(jq -r 'select(has("fixture_message")) | .fixture_message' "$handoff_file")"
+    [[ "$actual" == "$expected" ]] || fail "$count: source append changed the 30-message snapshot"
+    [[ "$(jq -r 'select(has("fixture_message")) | .fixture_message' "$source_file" | tail -n 1)" == 999 ]] ||
+      fail "source append fixture did not run"
+  done
+  rm -rf "$tmp"
+  pass "handoffs retain a stable snapshot when the source grows"
+}
+
 test_install_adds_path_to_zsh_profile_once() {
   local tmp
   tmp="$(mktemp -d)"
@@ -276,6 +364,8 @@ test_creates_raw_handoff_and_dry_runs_target
 test_codex_session_uses_first_user_message_as_title
 test_claude_title_falls_back_to_ai_title
 test_rename_title_takes_priority
+test_handoff_keeps_latest_30_messages
+test_handoff_uses_snapshot_when_source_grows
 test_install_adds_path_to_zsh_profile_once
 test_confirm_accepts_yes_and_rejects_no
 test_help_and_version_and_update

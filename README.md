@@ -4,7 +4,7 @@
 
 Currently supports raw transcript handoff between Claude Code and Codex.
 
-This is not native session import — it copies the selected session's raw transcript (JSONL) and launches the target agent with a prompt asking it to read the file and continue from the latest unresolved point.
+This is not native session import — it copies the latest 30 user/assistant text messages from the selected session's raw transcript (JSONL), including tool records from that span, and launches the target agent with a prompt asking it to read the file and continue from the latest unresolved point.
 
 ## Install
 
@@ -51,7 +51,7 @@ agent-handoff help       # show usage
 ## How it works
 
 1. Scans session transcripts in `~/.claude/projects` and `~/.codex/sessions`. Only the first and last lines of each file are read, and titles are cached on disk, so scanning stays fast.
-2. Copies the selected transcript to `~/.agent-handoff/handoffs/<project>/` — the original is never touched.
+2. Copies the latest 30 user/assistant text messages and tool records from that span to `~/.agent-handoff/handoffs/<project>/`. Sessions with 30 or fewer messages are copied in full, and Codex session metadata is preserved. The original is never touched.
 3. Launches the target agent in the current directory with a handoff prompt pointing at the copy.
 
 ## Configuration
